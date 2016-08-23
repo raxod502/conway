@@ -1,34 +1,35 @@
 (ns conway.core
   "Contains functions for solving the Slothouber-Graatsma and similar
-  puzzles. The general puzzle involves placing a number of differently
-  shaped rectangular blocks (in any number of dimensions) onto a
-  rectangular grid. The puzzle to be solved is defined by the dynamic
-  vars at the top of this namespace (`*grid-shape*`, `*block-shapes*`,
-  and `*block-counts*`). Use `solve` to generate a solution.
+  puzzles. The Slothouber-Graatsma puzzle is to assemble six 1x2x2 and
+  three 1x1x1 blocks into a 3x3x3 cube. The general puzzle involves
+  placing a number of differently shaped rectangular blocks (in any
+  number of dimensions) onto a rectangular grid. The puzzle to be
+  solved is defined by the dynamic vars at the top of this
+  namespace (`*grid-shape*` and `*block-counts*`). Use `solve` to
+  generate a solution.
 
-  Blocks are represented as keywords, which have a shape and count
-  assigned to them via the `*block-shapes*` and `*block-counts*` maps.
-  The shape of a block is a vector of its side lengths, and the count
-  is the number of copies of that block that must be placed in the
-  grid. Note that blocks can be oriented in any direction.
+  Blocks are identified by keywords generated automatically by the
+  `block-seq` function based on `*block-counts*`. This var is a map
+  from the side lengths of each block to the number of copies of the
+  block that must be placed in the grid. Note that blocks can be
+  oriented in any direction.
 
   The grid is represented using nested vectors, where to get a
   particular cell you can do (get-in grid [x y z ...]). Each cell will
   either be nil (if it is empty) or a keyword (if it is taken up by
   a block or part of a block)."
-  (:require [clojure.pprint :as pp]))
+  (:require [clojure.pprint :as pp]
+            [clojure.string :as str]))
 
 (def ^:dynamic *grid-shape*
   "The side lengths of the grid."
   [3 3 3])
-(def ^:dynamic *block-shapes*
-  "The side lengths for each type of block."
-  {:A [1 1 1]
-   :B [1 2 2]})
+
 (def ^:dynamic *block-counts*
-  "The number of each type of block that needs to be placed in the grid."
-  {:A 3
-   :B 6})
+  "A map from the side lengths for each block to the number of copies of
+  the block that need to be placed in the grid."
+  {[1 1 1] 3
+   [1 2 2] 6})
 
 (defn initial-grid
   "Returns an empty grid, a nested vector whose shape is given by
@@ -89,14 +90,32 @@
      (repeatedly tries)
      (first))))
 
-(defn counts->seq
-  "Takes a map whose values are nonnegative integers and returns a
-  sequence which contains each key the number of times specified by
-  the corresponding value, in no particular order. Inverse of
-  `clojure.core/frequencies`."
-  [freqs]
-  (mapcat #(repeat (val %) (key %))
-          freqs))
+(def alphabet
+  "A string containing the uppercase letters A-Z concatenated."
+  (->> (range 26)
+    (map #(+ % 65))
+    (map char)
+    (apply str)))
+
+(def base-identifiers
+  "The sequence of identifiers used to identify different types of
+  blocks. These have integers postpended to them in order to identify
+  individual blocks of the same type."
+  alphabet)
+
+(defn block-seq
+  "Returns a sequence of maps representing blocks to be placed on
+  the grid. Each map has a unique :identifier for the block as well
+  as the :shape of the block. The order is guaranteed to be the same
+  every time `block-seq` is called."
+  []
+  (->> *block-counts*
+    (sort-by key)
+    (mapcat (fn [base-identifer [shape copies]]
+              (for [index (range 1 (inc copies))]
+                {:identifier (keyword (str base-identifer index))
+                 :shape shape}))
+            base-identifiers)))
 
 (defn drop-nth
   "Returns a sequence of the collection with the nth element removed."
@@ -104,26 +123,26 @@
   (concat (take n coll)
           (drop (inc n) coll)))
 
-(defn select-random-block
-  "Given a sequence of blocks, as represented by keywords, returns a
-  map where :block is a random block and :blocks is the rest of the
-  blocks."
-  [blocks]
-  (let [n (rand-int (count blocks))]
-    {:block (nth blocks n)
-     :blocks (drop-nth blocks n)}))
+(defn rand-nth-and-rest
+  "Given a collection, returns a map containing a random element of
+  the collection under :rand-nth and the rest of the collection
+  under :rest."
+  [coll]
+  (let [n (rand-int (count coll))]
+    {:rand-nth (nth coll n)
+     :rest (drop-nth coll n)}))
 
 (defn- solve*
-  "Helper function for `solve`. grid is the grid and blocks is a
-  sequence of keywords representing the remaining blocks to be
-  placed. Returns a grid with all the blocks placed, or nil."
+  "Helper function for `solve`. grid is the partially filled grid and
+  blocks is a subsequence of (`block-seq`). Returns a grid with all the
+  blocks placed, or nil."
   [placement-tries recur-tries grid blocks]
   (if (seq blocks)
-    (->> (let [{:keys [block blocks]}
-               (select-random-block blocks)]
+    (->> (let [{block :rand-nth blocks :rest}
+               (rand-nth-and-rest blocks)]
            (when-let [grid (try-placing-block-randomly
-                             grid (get *block-shapes* block)
-                             block placement-tries)]
+                             grid (:shape block)
+                             (:identifier block) placement-tries)]
              (solve* placement-tries recur-tries grid blocks)))
       (fn [])
       (repeatedly recur-tries)
@@ -134,24 +153,24 @@
 (defn solve
   "Returns a grid in which all of the blocks have been placed, or nil
   if a solution could not be found. The algorithm used is a recursive
-  backtracker: First a block is placed randomly (this is tried until
-  a placement succeeds or placement-tries placements have failed), and
-  then the algorithm recurs. If this placement does not lead to a
-  solution, another random placement is made. This process will repeat
-  until a solution is found or recur-tries attempts have been made.
+  backtracker: First a block is placed randomly (using
+  `try-placing-block-randomly` with placement-tries), and
+  then (provided that a block could be placed) the algorithm recurs.
+  If this placement does not lead to a solution, another random
+  placement is made. This process will repeat until a solution is
+  found or recur-tries attempts have been made at each level.
 
-  Solves the puzzle specified by `*grid-shape*`, `*block-shapes*`, and
-  `*block-counts*`. Rebind or alter these vars if you want to solve a
-  different puzzle.
+  Solves the puzzle specified by `*grid-shape*` and `*block-counts*`.
+  Rebind or alter these vars if you want to solve a different puzzle.
 
   Note that since a Monte Carlo algorithm is used, you may have to try
   a few times to get a good solution. Good parameters for the default
-  (Slothouber-Graatsma) puzzle are (solve 10000 20)."
+  (Slothouber-Graatsma) puzzle are (solve 10000 10)."
   [placement-tries recur-tries]
   (solve* placement-tries
           recur-tries
           (initial-grid)
-          (counts->seq *block-counts*)))
+          (block-seq)))
 
 (defn -main
   "Solves the Slothouber-Graatsma puzzle, printing the solution. If no
@@ -159,12 +178,20 @@
   [& args]
   (when (seq args)
     (println "Ignoring arguments:" args))
-  (if-let [grid (->> (solve 10000 20)
+  (if-let [grid (->> (solve 10000 10)
                   (fn [])
                   (repeatedly 10)
                   (remove nil?)
                   (first))]
     (do
-      (println "Each 1x1x1 piece is represented by :A.")
-      (println "Each 1x2x2 piece is represented by :B.")
+      (->> *block-counts*
+        (sort-by key)
+        (map (fn [base-identifier [shape copies]]
+               (printf "%s through %s = %s%n"
+                       (keyword (str base-identifier 1))
+                       (keyword (str base-identifier copies))
+                       (str/join "x" shape))
+               (flush))
+             base-identifiers)
+        (dorun))
       (pp/pprint grid))))
